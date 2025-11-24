@@ -7,13 +7,25 @@ import type {
 	IRequestOptions,
 	JsonObject,
 } from 'n8n-workflow';
+const sleep = (ms: number) =>
+	new Promise<void>((resolve) => {
+		(globalThis as unknown as { setTimeout: (handler: () => void, timeout?: number) => void }).setTimeout(
+			() => resolve(),
+			ms,
+		);
+	});
 import { NodeApiError, NodeConnectionTypes, NodeOperationError } from 'n8n-workflow';
+
+type ResourceType = 'image' | 'reels';
+
+const READY_STATUSES = new Set(['FINISHED', 'PUBLISHED', 'READY']);
+const ERROR_STATUSES = new Set(['ERROR', 'FAILED']);
 
 export class Instagram implements INodeType {
 	description: INodeTypeDescription = {
 		displayName: 'Instagram',
 		name: 'instagram',
-		icon: { light: 'file:instagram.svg', dark: 'file:instagram.dark.svg' },
+		icon: { light: 'file:instagram.png', dark: 'file:instagram.dark.png' },
 		group: ['transform'],
 		version: 1,
 		description: 'Publish media to Instagram using Facebook Graph API',
@@ -37,6 +49,24 @@ export class Instagram implements INodeType {
 		},
 		properties: [
 			{
+				displayName: 'Resource',
+				name: 'resource',
+				type: 'options',
+				options: [
+					{
+						name: 'Image',
+						value: 'image',
+					},
+					{
+						name: 'Reels',
+						value: 'reels',
+					},
+				],
+				default: 'image',
+				description: 'Select the Instagram media type to publish.',
+				required: true,
+			},
+			{
 				displayName: 'Node',
 				name: 'node',
 				type: 'string',
@@ -53,6 +83,24 @@ export class Instagram implements INodeType {
 				default: '',
 				description: 'The URL of the image to publish on Instagram',
 				required: true,
+				displayOptions: {
+					show: {
+						resource: ['image'],
+					},
+				},
+			},
+			{
+				displayName: 'Video URL',
+				name: 'videoUrl',
+				type: 'string',
+				default: '',
+				description: 'The URL of the video to publish as a reel on Instagram',
+				required: true,
+				displayOptions: {
+					show: {
+						resource: ['reels'],
+					},
+				},
 			},
 			{
 				displayName: 'Caption',
@@ -69,11 +117,95 @@ export class Instagram implements INodeType {
 		const items = this.getInputData();
 		const returnItems: INodeExecutionData[] = [];
 
+		const waitForContainerReady = async ({
+			resource,
+			creationId,
+			hostUrl,
+			graphApiVersion,
+			accessToken,
+			itemIndex,
+		}: {
+			resource: ResourceType;
+			creationId: string;
+			hostUrl: string;
+			graphApiVersion: string;
+			accessToken: string;
+			itemIndex: number;
+		}) => {
+			const pollIntervalMs = resource === 'reels' ? 3000 : 1500;
+			const maxPollAttempts = resource === 'reels' ? 80 : 20;
+			const statusUri = `https://${hostUrl}/${graphApiVersion}/${creationId}`;
+			const statusFields = ['status_code', 'status'];
+
+			const pollRequestOptions: IRequestOptions = {
+				headers: {
+					accept: 'application/json,text/*;q=0.99',
+				},
+				method: 'GET',
+				uri: statusUri,
+				qs: {
+					access_token: accessToken,
+					fields: statusFields.join(','),
+				},
+				json: true,
+				gzip: true,
+			};
+
+			let lastStatus: string | undefined;
+
+			for (let attempt = 1; attempt <= maxPollAttempts; attempt++) {
+				const statusResponse = (await this.helpers.request(pollRequestOptions)) as IDataObject;
+				const statuses = statusFields
+					.map((field) => statusResponse[field as keyof IDataObject])
+					.filter((value): value is string => typeof value === 'string')
+					.map((value) => value.toUpperCase());
+
+				if (statuses.length > 0) {
+					lastStatus = statuses[0];
+				}
+
+				if (statuses.some((status) => READY_STATUSES.has(status))) {
+					return;
+				}
+
+				if (statuses.some((status) => ERROR_STATUSES.has(status))) {
+					throw new NodeOperationError(
+						this.getNode(),
+						`Media container reported error status (${statuses.join(', ')}) while waiting to publish.`,
+						{ itemIndex },
+					);
+				}
+
+				await sleep(pollIntervalMs);
+			}
+
+			throw new NodeOperationError(
+				this.getNode(),
+				`Timed out waiting for container to become ready. Last known status: ${lastStatus ?? 'unknown'}.`,
+				{ itemIndex },
+			);
+		};
+
+		const isMediaNotReadyError = (error: unknown) => {
+			const graphError = (error as any)?.response?.body?.error;
+			if (!graphError) return false;
+			const message = (graphError.message as string | undefined)?.toLowerCase() ?? '';
+			const code = graphError.code as number | undefined;
+			const subcode = graphError.error_subcode as number | undefined;
+			return (
+				message.includes('not ready') ||
+				message.includes('not finished') ||
+				message.includes('not yet') ||
+				code === 900 ||
+				subcode === 2207055
+			);
+		};
+
 		for (let itemIndex = 0; itemIndex < items.length; itemIndex++) {
 			try {
 				const graphApiCredentials = await this.getCredentials('facebookGraphApi');
+				const resource = this.getNodeParameter('resource', itemIndex) as ResourceType;
 				const node = this.getNodeParameter('node', itemIndex) as string;
-				const imageUrl = this.getNodeParameter('imageUrl', itemIndex) as string;
 				const caption = this.getNodeParameter('caption', itemIndex) as string;
 
 				// Hardcoded values as per requirements
@@ -85,9 +217,17 @@ export class Instagram implements INodeType {
 				const mediaUri = `https://${hostUrl}/${graphApiVersion}/${node}/media`;
 				const mediaQs: IDataObject = {
 					access_token: graphApiCredentials.accessToken,
-					image_url: imageUrl,
-					caption: caption,
+					caption,
 				};
+
+				if (resource === 'image') {
+					const imageUrl = this.getNodeParameter('imageUrl', itemIndex) as string;
+					mediaQs.image_url = imageUrl;
+				} else if (resource === 'reels') {
+					const videoUrl = this.getNodeParameter('videoUrl', itemIndex) as string;
+					mediaQs.video_url = videoUrl;
+					mediaQs.media_type = 'REELS';
+				}
 
 				const mediaRequestOptions: IRequestOptions = {
 					headers: {
@@ -147,13 +287,21 @@ export class Instagram implements INodeType {
 					continue;
 				}
 
+				// Wait until the container is ready before publishing
+				await waitForContainerReady({
+					resource,
+					creationId,
+					hostUrl,
+					graphApiVersion,
+					accessToken: graphApiCredentials.accessToken as string,
+					itemIndex,
+				});
+
 				// Second request: Publish media
 				const publishUri = `https://${hostUrl}/${graphApiVersion}/${node}/media_publish`;
 				const publishQs: IDataObject = {
 					access_token: graphApiCredentials.accessToken,
 					creation_id: creationId,
-					image_url: imageUrl,
-					caption: caption,
 				};
 
 				const publishRequestOptions: IRequestOptions = {
@@ -167,29 +315,56 @@ export class Instagram implements INodeType {
 					gzip: true,
 				};
 
+				const publishRetryDelay = resource === 'reels' ? 3000 : 1500;
+				const publishMaxAttempts = resource === 'reels' ? 6 : 3;
 				let publishResponse: any;
-				try {
-					publishResponse = await this.helpers.request(publishRequestOptions);
-				} catch (error) {
-					if (!this.continueOnFail()) {
-						throw new NodeApiError(this.getNode(), error as JsonObject);
-					}
+				let publishSucceeded = false;
+				let publishFailedWithError = false;
 
-					let errorItem;
-					if ((error as any).response !== undefined) {
-						const graphApiErrors = (error as any).response.body?.error ?? {};
-						errorItem = {
-							statusCode: (error as any).statusCode,
-							...graphApiErrors,
-							headers: (error as any).response.headers,
-							creation_id: creationId,
-							note: 'Media was created but publishing failed',
-						};
-					} else {
-						errorItem = { ...error, creation_id: creationId, note: 'Media was created but publishing failed' };
+				for (let attempt = 1; attempt <= publishMaxAttempts; attempt++) {
+					try {
+						publishResponse = await this.helpers.request(publishRequestOptions);
+						publishSucceeded = true;
+						break;
+					} catch (error) {
+						if (isMediaNotReadyError(error) && attempt < publishMaxAttempts) {
+							await sleep(publishRetryDelay);
+							continue;
+						}
+
+						if (!this.continueOnFail()) {
+							throw new NodeApiError(this.getNode(), error as JsonObject);
+						}
+
+						let errorItem;
+						if ((error as any).response !== undefined) {
+							const graphApiErrors = (error as any).response.body?.error ?? {};
+							errorItem = {
+								statusCode: (error as any).statusCode,
+								...graphApiErrors,
+								headers: (error as any).response.headers,
+								creation_id: creationId,
+								note: 'Media was created but publishing failed',
+							};
+						} else {
+							errorItem = { ...error, creation_id: creationId, note: 'Media was created but publishing failed' };
+						}
+						returnItems.push({ json: { ...errorItem } });
+						publishFailedWithError = true;
+						break;
 					}
-					returnItems.push({ json: { ...errorItem } });
+				}
+
+				if (publishFailedWithError) {
 					continue;
+				}
+
+				if (!publishSucceeded) {
+					throw new NodeOperationError(
+						this.getNode(),
+						`Failed to publish media after ${publishMaxAttempts} attempts due to container not being ready.`,
+						{ itemIndex },
+					);
 				}
 
 				if (typeof publishResponse === 'string') {
