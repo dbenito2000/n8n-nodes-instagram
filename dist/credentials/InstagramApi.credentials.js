@@ -5,29 +5,34 @@ class InstagramApi {
     constructor() {
         this.name = 'instagramApi';
         this.displayName = 'Instagram API';
-        this.documentationUrl = 'https://github.com/org/-instagram?tab=readme-ov-file#credentials';
+        this.icon = 'file:facebook.svg';
+        this.documentationUrl = 'https://github.com/MookieLian/n8n-nodes-instagram#credentials';
         this.properties = [
             {
-                displayName: 'API Key',
-                name: 'apiKey',
+                displayName: 'Access Token',
+                name: 'accessToken',
                 type: 'string',
                 typeOptions: { password: true },
                 required: true,
                 default: '',
+                description: 'Instagram Graph API user access token with publish permissions',
             },
         ];
         this.authenticate = {
             type: 'generic',
             properties: {
-                headers: {
-                    'x-api-key': '={{$credentials.apiKey}}',
+                qs: {
+                    access_token: '={{$credentials.accessToken}}',
                 },
             },
         };
         this.test = {
             request: {
-                baseURL: 'https://graph.facebook.com/',
-                url: '/v1/user',
+                method: 'GET',
+                url: 'https://graph.facebook.com/v22.0/me',
+                qs: {
+                    fields: 'id',
+                },
             },
         };
     }

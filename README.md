@@ -1,8 +1,8 @@
 # n8n-nodes-instagram
 
-This is an n8n community node. It lets you use _app/service name_ in your n8n workflows.
+This package adds an Instagram Publishing node to n8n so you can send media to your Instagram Business accounts without leaving your workflow.
 
-_App/service name_ is _one or two sentences describing the service this node integrates with_.
+Instagram Publishing is powered by the Facebook Graph API and allows programmatic upload of images, reels and stories to any Instagram Business or Creator account.
 
 [n8n](https://n8n.io/) is a [fair-code licensed](https://docs.n8n.io/sustainable-use-license/) workflow automation platform.
 
@@ -20,27 +20,45 @@ Follow the [installation guide](https://docs.n8n.io/integrations/community-nodes
 
 ## Operations
 
-_List the operations supported by your node._
+The node exposes three resources that follow the same two-step publish flow (media container creation + media publish):
+
+| Resource | Description |
+| --- | --- |
+| `Image` | Publish a single image with an optional caption. |
+| `Reels` | Publish a reel video. Handles container polling until the video is processed. |
+| `Stories` | Publish a story video using the same logic as reels with `media_type=STORIES`. |
 
 ## Credentials
 
-_If users need to authenticate with the app/service, provide details here. You should include prerequisites (such as signing up with the service), available authentication methods, and how to set them up._
+Create an **Instagram API** credential that stores a long-lived Facebook Graph API user access token with `instagram_basic`, `pages_show_list`, `instagram_content_publish`, and `pages_read_engagement` permissions.  
+Steps:
+
+1. Make sure the Instagram account is a Business/Creator account connected to a Facebook Page.  
+2. Use Meta’s Graph Explorer or your own app to generate an access token that includes the scopes listed above.  
+3. Convert it to a long-lived token and paste it into the credential’s **Access Token** field.  
+4. The built-in credential test hits `https://graph.facebook.com/v22.0/me` to confirm the token works.
 
 ## Compatibility
 
-_State the minimum n8n version, as well as which versions you test against. You can also include any known version incompatibility issues._
+- Built against **n8n 1.120.4** (community-node CLI v0.16).  
+- Requires n8n `>=1.0` with community nodes enabled.  
+- Uses only built-in n8n dependencies, so it is Cloud-compatible.
 
 ## Usage
 
-_This is an optional section. Use it to help users with any difficult or confusing aspects of the node._
-
-_By the time users are looking for community nodes, they probably already know n8n basics. But if you expect new users, you can link to the [Try it out](https://docs.n8n.io/try-it-out/) documentation to help them get started._
+1. Add the **Instagram** node to your workflow and select one of the resources (Image/Reels/Stories).  
+2. Provide the Instagram Business Account ID (the “Node” parameter), media URL and caption.  
+3. The node first creates the media container, polls Graph API until processing completes, then triggers `media_publish`.  
+4. Handle any errors returned by the API (rate limits, permissions) via the node’s error output or `Continue On Fail`.
 
 ## Resources
 
-* [n8n community nodes documentation](https://docs.n8n.io/integrations/#community-nodes)
-* _Link to app/service documentation._
+* [n8n community nodes documentation](https://docs.n8n.io/integrations/#community-nodes)  
+* [Instagram Graph API - Publishing](https://developers.facebook.com/docs/instagram-api/reference/ig-user/media)  
+* [Video/Reels publishing guide](https://developers.facebook.com/docs/instagram-api/guides/content-publishing/reels/)
 
 ## Version history
 
-_This is another optional section. If your node has multiple versions, include a short description of available versions and what changed, as well as any compatibility impact._
+| Version | Notes |
+| --- | --- |
+| 0.1.0 | Initial release with Image, Reels and Stories publishing & built-in container polling. |

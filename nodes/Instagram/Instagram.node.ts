@@ -1,25 +1,14 @@
 import type {
 	IDataObject,
 	IExecuteFunctions,
+	IHttpRequestOptions,
 	INodeExecutionData,
 	INodeType,
 	INodeTypeDescription,
-	IRequestOptions,
 	JsonObject,
 } from 'n8n-workflow';
-const sleep = (ms: number) =>
-	new Promise<void>((resolve) => {
-		(globalThis as unknown as { setTimeout: (handler: () => void, timeout?: number) => void }).setTimeout(
-			() => resolve(),
-			ms,
-		);
-	});
-import { NodeApiError, NodeConnectionTypes, NodeOperationError } from 'n8n-workflow';
-import {
-	instagramResourceFields,
-	instagramResourceHandlers,
-	instagramResourceOptions,
-} from './resources';
+import { NodeApiError, NodeConnectionTypes, NodeOperationError, sleep } from 'n8n-workflow';
+import { instagramResourceFields, instagramResourceHandlers } from './resources';
 import type { InstagramResourceType } from './resources/types';
 
 const READY_STATUSES = new Set(['FINISHED', 'PUBLISHED', 'READY']);
@@ -29,7 +18,7 @@ export class Instagram implements INodeType {
 	description: INodeTypeDescription = {
 		displayName: 'Instagram',
 		name: 'instagram',
-		icon: { light: 'file:instagram.png', dark: 'file:instagram.dark.png' },
+		icon: { light: 'file:instagram.svg', dark: 'file:instagram.dark.svg' },
 		group: ['transform'],
 		version: 1,
 		description: 'Publish media to Instagram using Facebook Graph API',
@@ -41,7 +30,7 @@ export class Instagram implements INodeType {
 		outputs: [NodeConnectionTypes.Main],
 		credentials: [
 			{
-				name: 'facebookGraphApi',
+				name: 'instagramApi',
 				required: true,
 			},
 		],
@@ -56,9 +45,26 @@ export class Instagram implements INodeType {
 				displayName: 'Resource',
 				name: 'resource',
 				type: 'options',
-				options: instagramResourceOptions,
+				noDataExpression: true,
+				options: [
+					{
+						name: 'Image',
+						value: 'image',
+						description: 'Publish an image post',
+					},
+					{
+						name: 'Reel',
+						value: 'reels',
+						description: 'Publish a reel',
+					},
+					{
+						name: 'Story',
+						value: 'stories',
+						description: 'Publish a story',
+					},
+				],
 				default: 'image',
-				description: 'Select the Instagram media type to publish.',
+				description: 'Select the Instagram media type to publish',
 				required: true,
 			},
 			{
@@ -91,7 +97,6 @@ export class Instagram implements INodeType {
 			creationId,
 			hostUrl,
 			graphApiVersion,
-			accessToken,
 			itemIndex,
 			pollIntervalMs,
 			maxPollAttempts,
@@ -99,7 +104,6 @@ export class Instagram implements INodeType {
 			creationId: string;
 			hostUrl: string;
 			graphApiVersion: string;
-			accessToken: string;
 			itemIndex: number;
 			pollIntervalMs: number;
 			maxPollAttempts: number;
@@ -107,24 +111,26 @@ export class Instagram implements INodeType {
 			const statusUri = `https://${hostUrl}/${graphApiVersion}/${creationId}`;
 			const statusFields = ['status_code', 'status'];
 
-			const pollRequestOptions: IRequestOptions = {
+			const pollRequestOptions: IHttpRequestOptions = {
 				headers: {
 					accept: 'application/json,text/*;q=0.99',
 				},
 				method: 'GET',
-				uri: statusUri,
+				url: statusUri,
 				qs: {
-					access_token: accessToken,
 					fields: statusFields.join(','),
 				},
 				json: true,
-				gzip: true,
 			};
 
 			let lastStatus: string | undefined;
 
 			for (let attempt = 1; attempt <= maxPollAttempts; attempt++) {
-				const statusResponse = (await this.helpers.request(pollRequestOptions)) as IDataObject;
+				const statusResponse = (await this.helpers.httpRequestWithAuthentication.call(
+					this,
+					'instagramApi',
+					pollRequestOptions,
+				)) as IDataObject;
 				const statuses = statusFields
 					.map((field) => statusResponse[field as keyof IDataObject])
 					.filter((value): value is string => typeof value === 'string')
@@ -157,7 +163,20 @@ export class Instagram implements INodeType {
 		};
 
 		const isMediaNotReadyError = (error: unknown) => {
-			const graphError = (error as any)?.response?.body?.error;
+			type GraphError = {
+				message?: string;
+				code?: number;
+				error_subcode?: number;
+			};
+			type ErrorWithGraph = {
+				response?: {
+					body?: {
+						error?: GraphError;
+					};
+				};
+			};
+			const errorWithGraph = error as ErrorWithGraph;
+			const graphError = errorWithGraph?.response?.body?.error;
 			if (!graphError) return false;
 			const message = (graphError.message as string | undefined)?.toLowerCase() ?? '';
 			const code = graphError.code as number | undefined;
@@ -173,7 +192,6 @@ export class Instagram implements INodeType {
 
 		for (let itemIndex = 0; itemIndex < items.length; itemIndex++) {
 			try {
-				const graphApiCredentials = await this.getCredentials('facebookGraphApi');
 				const resource = this.getNodeParameter('resource', itemIndex) as InstagramResourceType;
 				const handler = instagramResourceHandlers[resource];
 				if (!handler) {
@@ -193,42 +211,56 @@ export class Instagram implements INodeType {
 				const mediaUri = `https://${hostUrl}/${graphApiVersion}/${node}/media`;
 				const mediaPayload = handler.buildMediaPayload.call(this, itemIndex);
 				const mediaQs: IDataObject = {
-					access_token: graphApiCredentials.accessToken,
 					caption,
 					...mediaPayload,
 				};
 
-				const mediaRequestOptions: IRequestOptions = {
+				const mediaRequestOptions: IHttpRequestOptions = {
 					headers: {
 						accept: 'application/json,text/*;q=0.99',
 					},
 					method: httpRequestMethod,
-					uri: mediaUri,
+					url: mediaUri,
 					qs: mediaQs,
-					json: true,
-					gzip: true,
+				json: true,
 				};
 
-				let mediaResponse: any;
+				let mediaResponse: IDataObject;
 				try {
-					mediaResponse = await this.helpers.request(mediaRequestOptions);
-				} catch (error) {
+					mediaResponse = await this.helpers.httpRequestWithAuthentication.call(
+						this,
+						'instagramApi',
+						mediaRequestOptions,
+					);
+				} catch (error: unknown) {
 					if (!this.continueOnFail()) {
 						throw new NodeApiError(this.getNode(), error as JsonObject);
 					}
 
-					let errorItem;
-					if ((error as any).response !== undefined) {
-						const graphApiErrors = (error as any).response.body?.error ?? {};
+					let errorItem: Record<string, unknown>;
+					type ResponseErrorType = {
+						statusCode?: number;
+						response?: {
+							body?: {
+								error?: {
+									[key: string]: unknown;
+								};
+							};
+							headers?: Record<string, unknown>;
+						};
+					};
+					const err = error as ResponseErrorType;
+					if (err.response !== undefined) {
+						const graphApiErrors = err.response.body?.error ?? {};
 						errorItem = {
-							statusCode: (error as any).statusCode,
+							statusCode: err.statusCode,
 							...graphApiErrors,
-							headers: (error as any).response.headers,
+							headers: err.response.headers,
 						};
 					} else {
-						errorItem = error;
+						errorItem = err;
 					}
-					returnItems.push({ json: { ...errorItem } });
+					returnItems.push({ json: errorItem as IDataObject });
 					continue;
 				}
 
@@ -243,7 +275,7 @@ export class Instagram implements INodeType {
 				}
 
 				// Extract creation_id from first response
-				const creationId = mediaResponse.id;
+				const creationId = mediaResponse.id as string | undefined;
 				if (!creationId) {
 					if (!this.continueOnFail()) {
 						throw new NodeOperationError(
@@ -261,7 +293,6 @@ export class Instagram implements INodeType {
 					creationId,
 					hostUrl,
 					graphApiVersion,
-					accessToken: graphApiCredentials.accessToken as string,
 					itemIndex,
 					pollIntervalMs: handler.pollIntervalMs,
 					maxPollAttempts: handler.maxPollAttempts,
@@ -270,30 +301,32 @@ export class Instagram implements INodeType {
 				// Second request: Publish media
 				const publishUri = `https://${hostUrl}/${graphApiVersion}/${node}/media_publish`;
 				const publishQs: IDataObject = {
-					access_token: graphApiCredentials.accessToken,
 					creation_id: creationId,
 				};
 
-				const publishRequestOptions: IRequestOptions = {
+				const publishRequestOptions: IHttpRequestOptions = {
 					headers: {
 						accept: 'application/json,text/*;q=0.99',
 					},
 					method: httpRequestMethod,
-					uri: publishUri,
+					url: publishUri,
 					qs: publishQs,
-					json: true,
-					gzip: true,
+				json: true,
 				};
 
 				const publishRetryDelay = handler.publishRetryDelay;
 				const publishMaxAttempts = handler.publishMaxAttempts;
-				let publishResponse: any;
+				let publishResponse: IDataObject;
 				let publishSucceeded = false;
 				let publishFailedWithError = false;
 
 				for (let attempt = 1; attempt <= publishMaxAttempts; attempt++) {
 					try {
-						publishResponse = await this.helpers.request(publishRequestOptions);
+						publishResponse = await this.helpers.httpRequestWithAuthentication.call(
+							this,
+							'instagramApi',
+							publishRequestOptions,
+						);
 						publishSucceeded = true;
 						break;
 					} catch (error) {
@@ -307,23 +340,32 @@ export class Instagram implements INodeType {
 						}
 
 						let errorItem;
-						if ((error as any).response !== undefined) {
-							const graphApiErrors = (error as any).response.body?.error ?? {};
+						type ErrorWithResponse = {
+							response?: {
+								body?: {
+									error?: IDataObject;
+								};
+								headers?: IDataObject;
+							};
+							statusCode?: number;
+						};
+						const err = error as ErrorWithResponse;
+						if (err.response !== undefined) {
+							const graphApiErrors = err.response.body?.error ?? {};
 							errorItem = {
-								statusCode: (error as any).statusCode,
+								statusCode: err.statusCode,
 								...graphApiErrors,
-								headers: (error as any).response.headers,
+								headers: err.response.headers,
 								creation_id: creationId,
 								note: 'Media was created but publishing failed',
 							};
 						} else {
-							errorItem = { ...error, creation_id: creationId, note: 'Media was created but publishing failed' };
+							errorItem = { ...(error as object), creation_id: creationId, note: 'Media was created but publishing failed' };
 						}
 						returnItems.push({ json: { ...errorItem } });
 						publishFailedWithError = true;
 						break;
 					}
-				}
 
 				if (publishFailedWithError) {
 					continue;
@@ -349,18 +391,34 @@ export class Instagram implements INodeType {
 
 				// Return the publish response
 				returnItems.push({ json: publishResponse });
-			} catch (error) {
+			}
+		} catch (error) {
 				if (!this.continueOnFail()) {
 					throw new NodeApiError(this.getNode(), error as JsonObject);
 				}
 
 				let errorItem;
-				if ((error as any).response !== undefined) {
-					const graphApiErrors = (error as any).response.body?.error ?? {};
+				type GraphError = {
+					message?: string;
+					code?: number;
+					error_subcode?: number;
+				};
+				type ErrorWithGraph = {
+					response?: {
+						body?: {
+							error?: GraphError;
+						};
+						headers?: IDataObject;
+					};
+					statusCode?: number;
+				};
+				const errorWithGraph = error as ErrorWithGraph;
+				if (errorWithGraph.response !== undefined) {
+					const graphApiErrors = errorWithGraph.response.body?.error ?? {};
 					errorItem = {
-						statusCode: (error as any).statusCode,
+						statusCode: errorWithGraph.statusCode,
 						...graphApiErrors,
-						headers: (error as any).response.headers,
+						headers: errorWithGraph.response.headers,
 					};
 				} else {
 					errorItem = error;

@@ -32,6 +32,9 @@
         "strict": true,
         "nodes": [
             "dist/nodes/Instagram/Instagram.node.js"
+        ],
+        "credentials": [
+            "dist/credentials/InstagramApi.credentials.js"
         ]
     },
     "devDependencies": {
