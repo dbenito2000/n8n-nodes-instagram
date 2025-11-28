@@ -1,5 +1,5 @@
 {
-    "name": "n8n-nodes-instagram",
+    "name": "@mookie/n8n-nodes-instagram",
     "version": "0.1.0",
     "description": "Instagram node for n8n",
     "license": "MIT",
