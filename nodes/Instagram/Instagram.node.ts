@@ -8,7 +8,11 @@ import type {
 	JsonObject,
 } from 'n8n-workflow';
 import { NodeApiError, NodeConnectionTypes, NodeOperationError, sleep } from 'n8n-workflow';
-import { instagramResourceFields, instagramResourceHandlers } from './resources';
+import {
+	instagramResourceFields,
+	instagramResourceHandlers,
+	instagramResourceOptions,
+} from './resources';
 import type { InstagramResourceType } from './resources/types';
 
 const READY_STATUSES = new Set(['FINISHED', 'PUBLISHED', 'READY']);
@@ -46,25 +50,30 @@ export class Instagram implements INodeType {
 				name: 'resource',
 				type: 'options',
 				noDataExpression: true,
-				options: [
-					{
-						name: 'Image',
-						value: 'image',
-						description: 'Publish an image post',
-					},
-					{
-						name: 'Reel',
-						value: 'reels',
-						description: 'Publish a reel',
-					},
-					{
-						name: 'Story',
-						value: 'stories',
-						description: 'Publish a story',
-					},
-				],
+				options: [...instagramResourceOptions],
 				default: 'image',
 				description: 'Select the Instagram media type to publish',
+				required: true,
+			},
+			{
+				displayName: 'Operation',
+				name: 'operation',
+				type: 'options',
+				noDataExpression: true,
+				displayOptions: {
+					show: {
+						resource: ['image', 'reels', 'stories'],
+					},
+				},
+				options: [
+					{
+						name: 'Publish',
+						value: 'publish',
+						action: 'Publish',
+						description: 'Publish media to Instagram',
+					},
+				],
+				default: 'publish',
 				required: true,
 			},
 			{
@@ -76,6 +85,26 @@ export class Instagram implements INodeType {
 					'The Instagram Business Account ID or User ID on which to publish the media',
 				placeholder: 'me',
 				required: true,
+				displayOptions: {
+					show: {
+						resource: ['image', 'reels', 'stories'],
+						operation: ['publish'],
+					},
+				},
+			},
+			{
+				displayName: 'Graph API Version',
+				name: 'graphApiVersion',
+				type: 'string',
+				default: 'v22.0',
+				description: 'Facebook Graph API version to use when making requests, e.g. v22.0',
+				required: true,
+				displayOptions: {
+					show: {
+						resource: ['image', 'reels', 'stories'],
+						operation: ['publish'],
+					},
+				},
 			},
 			...instagramResourceFields,
 			{
@@ -85,6 +114,12 @@ export class Instagram implements INodeType {
 				default: '',
 				description: 'The caption text for the Instagram post',
 				required: true,
+				displayOptions: {
+					show: {
+						resource: ['image', 'reels', 'stories'],
+						operation: ['publish'],
+					},
+				},
 			},
 		],
 	};
@@ -193,6 +228,14 @@ export class Instagram implements INodeType {
 		for (let itemIndex = 0; itemIndex < items.length; itemIndex++) {
 			try {
 				const resource = this.getNodeParameter('resource', itemIndex) as InstagramResourceType;
+				const operation = this.getNodeParameter('operation', itemIndex) as string;
+
+				if (operation !== 'publish') {
+					throw new NodeOperationError(this.getNode(), `Unsupported operation: ${operation}`, {
+						itemIndex,
+					});
+				}
+
 				const handler = instagramResourceHandlers[resource];
 				if (!handler) {
 					throw new NodeOperationError(this.getNode(), `Unsupported resource: ${resource}`, {
@@ -200,11 +243,11 @@ export class Instagram implements INodeType {
 					});
 				}
 				const node = this.getNodeParameter('node', itemIndex) as string;
+				const graphApiVersion = this.getNodeParameter('graphApiVersion', itemIndex) as string;
 				const caption = this.getNodeParameter('caption', itemIndex) as string;
 
-				// Hardcoded values as per requirements
+				// Graph host remains static; version is configurable by the user
 				const hostUrl = 'graph.facebook.com';
-				const graphApiVersion = 'v22.0';
 				const httpRequestMethod = 'POST';
 
 				// First request: Create media container

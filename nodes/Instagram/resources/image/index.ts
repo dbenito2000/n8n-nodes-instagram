@@ -12,6 +12,7 @@ const imageFields: INodeProperties[] = [
 		displayOptions: {
 			show: {
 				resource: ['image'],
+			operation: ['publish'],
 			},
 		},
 	},

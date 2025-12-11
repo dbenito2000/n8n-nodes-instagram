@@ -12,6 +12,7 @@ const reelsFields: INodeProperties[] = [
 		displayOptions: {
 			show: {
 				resource: ['reels', 'stories'],
+			operation: ['publish'],
 			},
 		},
 	},

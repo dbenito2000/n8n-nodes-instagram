@@ -5,7 +5,7 @@ class InstagramApi {
     constructor() {
         this.name = 'instagramApi';
         this.displayName = 'Instagram API';
-        this.icon = 'file:facebook.svg';
+        this.icon = 'file:instagram.svg';
         this.documentationUrl = 'https://github.com/MookieLian/n8n-nodes-instagram#credentials';
         this.properties = [
             {

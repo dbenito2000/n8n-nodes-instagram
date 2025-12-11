@@ -12,6 +12,7 @@ const imageFields = [
         displayOptions: {
             show: {
                 resource: ['image'],
+                operation: ['publish'],
             },
         },
     },

@@ -9,7 +9,7 @@ import type {
 export class InstagramApi implements ICredentialType {
 	name = 'instagramApi';
 	displayName = 'Instagram API';
-	icon: Icon = 'file:facebook.svg';
+	icon: Icon = 'file:instagram.svg';
 	documentationUrl = 'https://github.com/MookieLian/n8n-nodes-instagram#credentials';
 	properties: INodeProperties[] = [
 		{

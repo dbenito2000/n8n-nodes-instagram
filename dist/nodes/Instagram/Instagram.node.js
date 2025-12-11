@@ -38,25 +38,30 @@ class Instagram {
                     name: 'resource',
                     type: 'options',
                     noDataExpression: true,
+                    options: [...resources_1.instagramResourceOptions],
+                    default: '',
+                    description: 'Select the Instagram media type to publish',
+                    required: true,
+                },
+                {
+                    displayName: 'Operation',
+                    name: 'operation',
+                    type: 'options',
+                    noDataExpression: true,
+                    displayOptions: {
+                        show: {
+                            resource: ['image', 'reels', 'stories'],
+                        },
+                    },
                     options: [
                         {
-                            name: 'Image',
-                            value: 'image',
-                            description: 'Publish an image post',
-                        },
-                        {
-                            name: 'Reel',
-                            value: 'reels',
-                            description: 'Publish a reel',
-                        },
-                        {
-                            name: 'Story',
-                            value: 'stories',
-                            description: 'Publish a story',
+                            name: 'Publish',
+                            value: 'publish',
+                            action: 'Publish',
+                            description: 'Publish media to Instagram',
                         },
                     ],
-                    default: 'image',
-                    description: 'Select the Instagram media type to publish',
+                    default: 'publish',
                     required: true,
                 },
                 {
@@ -67,6 +72,26 @@ class Instagram {
                     description: 'The Instagram Business Account ID or User ID on which to publish the media',
                     placeholder: 'me',
                     required: true,
+                    displayOptions: {
+                        show: {
+                            resource: ['image', 'reels', 'stories'],
+                            operation: ['publish'],
+                        },
+                    },
+                },
+                {
+                    displayName: 'Graph API Version',
+                    name: 'graphApiVersion',
+                    type: 'string',
+                    default: 'v22.0',
+                    description: 'Facebook Graph API version to use when making requests, e.g. v22.0',
+                    required: true,
+                    displayOptions: {
+                        show: {
+                            resource: ['image', 'reels', 'stories'],
+                            operation: ['publish'],
+                        },
+                    },
                 },
                 ...resources_1.instagramResourceFields,
                 {
@@ -76,6 +101,12 @@ class Instagram {
                     default: '',
                     description: 'The caption text for the Instagram post',
                     required: true,
+                    displayOptions: {
+                        show: {
+                            resource: ['image', 'reels', 'stories'],
+                            operation: ['publish'],
+                        },
+                    },
                 },
             ],
         };
@@ -136,6 +167,12 @@ class Instagram {
         for (let itemIndex = 0; itemIndex < items.length; itemIndex++) {
             try {
                 const resource = this.getNodeParameter('resource', itemIndex);
+                const operation = this.getNodeParameter('operation', itemIndex);
+                if (operation !== 'publish') {
+                    throw new n8n_workflow_1.NodeOperationError(this.getNode(), `Unsupported operation: ${operation}`, {
+                        itemIndex,
+                    });
+                }
                 const handler = resources_1.instagramResourceHandlers[resource];
                 if (!handler) {
                     throw new n8n_workflow_1.NodeOperationError(this.getNode(), `Unsupported resource: ${resource}`, {
@@ -143,9 +180,9 @@ class Instagram {
                     });
                 }
                 const node = this.getNodeParameter('node', itemIndex);
+                const graphApiVersion = this.getNodeParameter('graphApiVersion', itemIndex);
                 const caption = this.getNodeParameter('caption', itemIndex);
                 const hostUrl = 'graph.facebook.com';
-                const graphApiVersion = 'v22.0';
                 const httpRequestMethod = 'POST';
                 const mediaUri = `https://${hostUrl}/${graphApiVersion}/${node}/media`;
                 const mediaPayload = handler.buildMediaPayload.call(this, itemIndex);

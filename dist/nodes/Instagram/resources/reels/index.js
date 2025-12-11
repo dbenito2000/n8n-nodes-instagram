@@ -12,6 +12,7 @@ const reelsFields = [
         displayOptions: {
             show: {
                 resource: ['reels', 'stories'],
+                operation: ['publish'],
             },
         },
     },
