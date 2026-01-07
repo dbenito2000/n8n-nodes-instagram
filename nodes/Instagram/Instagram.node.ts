@@ -62,7 +62,7 @@ export class Instagram implements INodeType {
 				noDataExpression: true,
 				displayOptions: {
 					show: {
-						resource: ['image', 'reels', 'stories'],
+						resource: ['image', 'reels', 'stories', 'carousel'],
 					},
 				},
 				options: [
@@ -87,7 +87,7 @@ export class Instagram implements INodeType {
 				required: true,
 				displayOptions: {
 					show: {
-						resource: ['image', 'reels', 'stories'],
+						resource: ['image', 'reels', 'stories', 'carousel'],
 						operation: ['publish'],
 					},
 				},
@@ -101,7 +101,7 @@ export class Instagram implements INodeType {
 				required: true,
 				displayOptions: {
 					show: {
-						resource: ['image', 'reels', 'stories'],
+						resource: ['image', 'reels', 'stories', 'carousel'],
 						operation: ['publish'],
 					},
 				},
@@ -116,7 +116,7 @@ export class Instagram implements INodeType {
 				required: true,
 				displayOptions: {
 					show: {
-						resource: ['image', 'reels', 'stories'],
+						resource: ['image', 'reels', 'stories', 'carousel'],
 						operation: ['publish'],
 					},
 				},
@@ -250,96 +250,535 @@ export class Instagram implements INodeType {
 				const hostUrl = 'graph.facebook.com';
 				const httpRequestMethod = 'POST';
 
-				// First request: Create media container
-				const mediaUri = `https://${hostUrl}/${graphApiVersion}/${node}/media`;
-				const mediaPayload = handler.buildMediaPayload.call(this, itemIndex);
-				const mediaQs: IDataObject = {
-					caption,
-					...mediaPayload,
-				};
+				let creationId: string;
 
-				const mediaRequestOptions: IHttpRequestOptions = {
-					headers: {
-						accept: 'application/json,text/*;q=0.99',
-					},
-					method: httpRequestMethod,
-					url: mediaUri,
-					qs: mediaQs,
-					json: true,
-				};
-
-				let mediaResponse: IDataObject;
-				try {
-					mediaResponse = await this.helpers.httpRequestWithAuthentication.call(
-						this,
-						'instagramApi',
-						mediaRequestOptions,
-					);
-				} catch (error: unknown) {
-					if (!this.continueOnFail()) {
-						throw new NodeApiError(this.getNode(), error as JsonObject);
+				// Handle carousel posts differently
+				if (resource === 'carousel') {
+					// Get media items - handle different possible structures
+					let mediaItemsParam: IDataObject;
+					try {
+						mediaItemsParam = this.getNodeParameter('mediaItems', itemIndex, {}) as IDataObject;
+					} catch (error) {
+						if (!this.continueOnFail()) {
+							throw new NodeOperationError(
+								this.getNode(),
+								`Failed to read mediaItems parameter: ${(error as Error).message}`,
+								{ itemIndex },
+							);
+						}
+						returnItems.push({
+							json: { error: `Failed to read mediaItems parameter: ${(error as Error).message}` },
+							pairedItem: { item: itemIndex },
+						});
+						continue;
 					}
 
-					let errorItem: Record<string, unknown>;
-					type ResponseErrorType = {
-						statusCode?: number;
-						response?: {
-							body?: {
-								error?: {
-									[key: string]: unknown;
+					let mediaItemsData: Array<{
+						type: string;
+						imageUrl?: string;
+						videoUrl?: string;
+					}> = [];
+
+					// Handle different possible parameter structures
+					if (!mediaItemsParam || (typeof mediaItemsParam !== 'object' && !Array.isArray(mediaItemsParam))) {
+						if (!this.continueOnFail()) {
+							throw new NodeOperationError(
+								this.getNode(),
+								'Media items parameter is missing or invalid. Please add at least 2 media items to the carousel.',
+								{ itemIndex },
+							);
+						}
+						returnItems.push({
+							json: { error: 'Media items parameter is missing or invalid' },
+							pairedItem: { item: itemIndex },
+						});
+						continue;
+					}
+
+					if (Array.isArray(mediaItemsParam)) {
+						mediaItemsData = mediaItemsParam as Array<{
+							type: string;
+							imageUrl?: string;
+							videoUrl?: string;
+						}>;
+					} else {
+						// Try different property names that n8n might use
+						if (Array.isArray(mediaItemsParam.item)) {
+							mediaItemsData = mediaItemsParam.item as Array<{
+								type: string;
+								imageUrl?: string;
+								videoUrl?: string;
+							}>;
+						} else if (mediaItemsParam.item && typeof mediaItemsParam.item === 'object' && !Array.isArray(mediaItemsParam.item)) {
+							mediaItemsData = [mediaItemsParam.item as {
+								type: string;
+								imageUrl?: string;
+								videoUrl?: string;
+							}];
+						} else if (Array.isArray(mediaItemsParam.values)) {
+							mediaItemsData = mediaItemsParam.values as Array<{
+								type: string;
+								imageUrl?: string;
+								videoUrl?: string;
+							}>;
+						}
+					}
+
+					// Check if we have valid media items
+					if (!Array.isArray(mediaItemsData) || mediaItemsData.length < 2) {
+						const isEmpty = Object.keys(mediaItemsParam).length === 0;
+						const errorMessage = isEmpty
+							? 'No media items provided. Please add at least 2 media items (images or videos) to the carousel in the node configuration.'
+							: `Carousel posts require at least 2 media items. Found: ${mediaItemsData.length}. Parameter structure: ${JSON.stringify(mediaItemsParam)}`;
+						
+						if (!this.continueOnFail()) {
+							throw new NodeOperationError(
+								this.getNode(),
+								errorMessage,
+								{ itemIndex },
+							);
+						}
+						returnItems.push({
+							json: {
+								error: errorMessage,
+								parameterStructure: mediaItemsParam,
+								foundItems: mediaItemsData.length,
+							},
+							pairedItem: { item: itemIndex },
+						});
+						continue;
+					}
+
+					if (mediaItemsData.length > 10) {
+						if (!this.continueOnFail()) {
+							throw new NodeOperationError(
+								this.getNode(),
+								'Carousel posts can contain at most 10 media items.',
+								{ itemIndex },
+							);
+						}
+						returnItems.push({
+							json: { error: 'Carousel posts can contain at most 10 media items' },
+							pairedItem: { item: itemIndex },
+						});
+						continue;
+					}
+
+					// Step 1: Create individual media containers for each item
+					const mediaUri = `https://${hostUrl}/${graphApiVersion}/${node}/media`;
+					const containerIds: string[] = [];
+					let carouselCreationFailed = false;
+
+					for (let i = 0; i < mediaItemsData.length; i++) {
+						const item = mediaItemsData[i];
+						
+						if (!item || typeof item !== 'object') {
+							if (!this.continueOnFail()) {
+								throw new NodeOperationError(
+									this.getNode(),
+									`Media item ${i + 1} is invalid.`,
+									{ itemIndex },
+								);
+							}
+							returnItems.push({
+								json: { error: `Media item ${i + 1} is invalid` },
+								pairedItem: { item: itemIndex },
+							});
+							carouselCreationFailed = true;
+							break;
+						}
+
+						const itemPayload: IDataObject = {
+							is_carousel_item: true,
+						};
+
+						if (item.type === 'IMAGE') {
+							const imageUrl = item.imageUrl?.toString().trim();
+							if (!imageUrl) {
+								if (!this.continueOnFail()) {
+									throw new NodeOperationError(
+										this.getNode(),
+										`Media item ${i + 1} is missing imageUrl.`,
+										{ itemIndex },
+									);
+								}
+								returnItems.push({
+									json: { error: `Media item ${i + 1} is missing imageUrl` },
+									pairedItem: { item: itemIndex },
+								});
+								carouselCreationFailed = true;
+								break;
+							}
+							itemPayload.image_url = imageUrl;
+						} else if (item.type === 'VIDEO') {
+							const videoUrl = item.videoUrl?.toString().trim();
+							if (!videoUrl) {
+								if (!this.continueOnFail()) {
+									throw new NodeOperationError(
+										this.getNode(),
+										`Media item ${i + 1} is missing videoUrl.`,
+										{ itemIndex },
+									);
+								}
+								returnItems.push({
+									json: { error: `Media item ${i + 1} is missing videoUrl` },
+									pairedItem: { item: itemIndex },
+								});
+								carouselCreationFailed = true;
+								break;
+							}
+							itemPayload.video_url = videoUrl;
+							itemPayload.media_type = 'VIDEO';
+						} else {
+							if (!this.continueOnFail()) {
+								throw new NodeOperationError(
+									this.getNode(),
+									`Media item ${i + 1} has invalid type: ${item.type}. Must be IMAGE or VIDEO.`,
+									{ itemIndex },
+								);
+							}
+							returnItems.push({
+								json: { error: `Media item ${i + 1} has invalid type: ${item.type}` },
+								pairedItem: { item: itemIndex },
+							});
+							carouselCreationFailed = true;
+							break;
+						}
+
+						const itemRequestOptions: IHttpRequestOptions = {
+							headers: {
+								accept: 'application/json,text/*;q=0.99',
+							},
+							method: httpRequestMethod,
+							url: mediaUri,
+							qs: itemPayload,
+							json: true,
+						};
+
+						let itemResponse: IDataObject;
+						try {
+							itemResponse = await this.helpers.httpRequestWithAuthentication.call(
+								this,
+								'instagramApi',
+								itemRequestOptions,
+							);
+						} catch (error: unknown) {
+							if (!this.continueOnFail()) {
+								throw new NodeApiError(this.getNode(), error as JsonObject, {
+									message: `Failed to create carousel item ${i + 1}: ${(error as { message?: string })?.message || 'Unknown error'}`,
+								});
+							}
+
+							let errorItem: Record<string, unknown>;
+							type ResponseErrorType = {
+								statusCode?: number;
+								message?: string;
+								response?: {
+									body?: {
+										error?: {
+											[key: string]: unknown;
+										};
+									};
+									headers?: Record<string, unknown>;
 								};
 							};
-							headers?: Record<string, unknown>;
-						};
-					};
-					const err = error as ResponseErrorType;
-					if (err.response !== undefined) {
-						const graphApiErrors = err.response.body?.error ?? {};
-						errorItem = {
-							statusCode: err.statusCode,
-							...graphApiErrors,
-							headers: err.response.headers,
-						};
-					} else {
-						errorItem = err;
-					}
-					returnItems.push({ json: errorItem as IDataObject, pairedItem: { item: itemIndex } });
-					continue;
-				}
+							const err = error as ResponseErrorType;
+							if (err.response !== undefined) {
+								const graphApiErrors = err.response.body?.error ?? {};
+								errorItem = {
+									statusCode: err.statusCode,
+									message: err.message || (graphApiErrors as { message?: string })?.message || 'Unknown error',
+									...graphApiErrors,
+									headers: err.response.headers,
+									itemIndex: i + 1,
+									payload: itemPayload,
+								};
+							} else {
+								errorItem = {
+									...err,
+									itemIndex: i + 1,
+									payload: itemPayload,
+								};
+							}
+							returnItems.push({ json: errorItem as IDataObject, pairedItem: { item: itemIndex } });
+							carouselCreationFailed = true;
+							break;
+						}
 
-				if (typeof mediaResponse === 'string') {
-					if (!this.continueOnFail()) {
-						throw new NodeOperationError(this.getNode(), 'Media creation response body is not valid JSON.', {
-							itemIndex,
+						if (typeof itemResponse === 'string') {
+							if (!this.continueOnFail()) {
+								throw new NodeOperationError(
+									this.getNode(),
+									`Media item ${i + 1} creation response body is not valid JSON.`,
+									{ itemIndex },
+								);
+							}
+							returnItems.push({
+								json: { message: itemResponse, itemIndex: i + 1 },
+								pairedItem: { item: itemIndex },
+							});
+							carouselCreationFailed = true;
+							break;
+						}
+
+						const itemContainerId = itemResponse.id as string | undefined;
+						if (!itemContainerId) {
+							if (!this.continueOnFail()) {
+								throw new NodeOperationError(
+									this.getNode(),
+									`Media item ${i + 1} creation response did not contain an id.`,
+									{ itemIndex },
+								);
+							}
+							returnItems.push({
+								json: {
+									error: `No container id in response for item ${i + 1}`,
+									response: itemResponse,
+								},
+								pairedItem: { item: itemIndex },
+							});
+							carouselCreationFailed = true;
+							break;
+						}
+
+						// Wait for each container to be ready
+						try {
+							await waitForContainerReady({
+								creationId: itemContainerId,
+								hostUrl,
+								graphApiVersion,
+								itemIndex,
+								pollIntervalMs: handler.pollIntervalMs,
+								maxPollAttempts: handler.maxPollAttempts,
+							});
+						} catch (error) {
+							if (!this.continueOnFail()) {
+								throw error;
+							}
+							returnItems.push({
+								json: {
+									error: `Failed to wait for container ${itemContainerId} to be ready`,
+									itemIndex: i + 1,
+									errorDetails: error as IDataObject,
+								},
+								pairedItem: { item: itemIndex },
+							});
+							carouselCreationFailed = true;
+							break;
+						}
+
+						containerIds.push(itemContainerId);
+					}
+
+					if (carouselCreationFailed) {
+						continue;
+					}
+
+					if (containerIds.length === 0) {
+						if (!this.continueOnFail()) {
+							throw new NodeOperationError(
+								this.getNode(),
+								'No carousel items were successfully created.',
+								{ itemIndex },
+							);
+						}
+						returnItems.push({
+							json: { error: 'No carousel items were successfully created' },
+							pairedItem: { item: itemIndex },
 						});
+						continue;
 					}
-					returnItems.push({ json: { message: mediaResponse }, pairedItem: { item: itemIndex } });
-					continue;
-				}
 
-				// Extract creation_id from first response
-				const creationId = mediaResponse.id as string | undefined;
-				if (!creationId) {
-					if (!this.continueOnFail()) {
-						throw new NodeOperationError(
-							this.getNode(),
-							'Media creation response did not contain an id (creation_id).',
-							{ itemIndex },
+					// Step 2: Create carousel container
+					const carouselPayload: IDataObject = {
+						media_type: 'CAROUSEL',
+						children: containerIds.join(','),
+						caption,
+					};
+
+					const carouselRequestOptions: IHttpRequestOptions = {
+						headers: {
+							accept: 'application/json,text/*;q=0.99',
+						},
+						method: httpRequestMethod,
+						url: mediaUri,
+						qs: carouselPayload,
+						json: true,
+					};
+
+					let carouselResponse: IDataObject;
+					try {
+						carouselResponse = await this.helpers.httpRequestWithAuthentication.call(
+							this,
+							'instagramApi',
+							carouselRequestOptions,
 						);
-					}
-					returnItems.push({ json: { error: 'No creation_id in response', response: mediaResponse }, pairedItem: { item: itemIndex } });
-					continue;
-				}
+					} catch (error: unknown) {
+						if (!this.continueOnFail()) {
+							throw new NodeApiError(this.getNode(), error as JsonObject);
+						}
 
-				// Wait until the container is ready before publishing
-				await waitForContainerReady({
-					creationId,
-					hostUrl,
-					graphApiVersion,
-					itemIndex,
-					pollIntervalMs: handler.pollIntervalMs,
-					maxPollAttempts: handler.maxPollAttempts,
-				});
+						let errorItem: Record<string, unknown>;
+						type ResponseErrorType = {
+							statusCode?: number;
+							response?: {
+								body?: {
+									error?: {
+										[key: string]: unknown;
+									};
+								};
+								headers?: Record<string, unknown>;
+							};
+						};
+						const err = error as ResponseErrorType;
+						if (err.response !== undefined) {
+							const graphApiErrors = err.response.body?.error ?? {};
+							errorItem = {
+								statusCode: err.statusCode,
+								...graphApiErrors,
+								headers: err.response.headers,
+							};
+						} else {
+							errorItem = err;
+						}
+						returnItems.push({ json: errorItem as IDataObject, pairedItem: { item: itemIndex } });
+						continue;
+					}
+
+					if (typeof carouselResponse === 'string') {
+						if (!this.continueOnFail()) {
+							throw new NodeOperationError(
+								this.getNode(),
+								'Carousel creation response body is not valid JSON.',
+								{ itemIndex },
+							);
+						}
+						returnItems.push({ json: { message: carouselResponse }, pairedItem: { item: itemIndex } });
+						continue;
+					}
+
+					const carouselContainerId = carouselResponse.id as string | undefined;
+					if (!carouselContainerId) {
+						if (!this.continueOnFail()) {
+							throw new NodeOperationError(
+								this.getNode(),
+								'Carousel creation response did not contain an id (creation_id).',
+								{ itemIndex },
+							);
+						}
+						returnItems.push({
+							json: { error: 'No creation_id in carousel response', response: carouselResponse },
+							pairedItem: { item: itemIndex },
+						});
+						continue;
+					}
+
+					creationId = carouselContainerId;
+
+					// Wait until the carousel container is ready before publishing
+					await waitForContainerReady({
+						creationId,
+						hostUrl,
+						graphApiVersion,
+						itemIndex,
+						pollIntervalMs: handler.pollIntervalMs,
+						maxPollAttempts: handler.maxPollAttempts,
+					});
+				} else {
+					// Standard flow for non-carousel posts
+					// First request: Create media container
+					const mediaUri = `https://${hostUrl}/${graphApiVersion}/${node}/media`;
+					const mediaPayload = handler.buildMediaPayload.call(this, itemIndex);
+					const mediaQs: IDataObject = {
+						caption,
+						...mediaPayload,
+					};
+
+					const mediaRequestOptions: IHttpRequestOptions = {
+						headers: {
+							accept: 'application/json,text/*;q=0.99',
+						},
+						method: httpRequestMethod,
+						url: mediaUri,
+						qs: mediaQs,
+						json: true,
+					};
+
+					let mediaResponse: IDataObject;
+					try {
+						mediaResponse = await this.helpers.httpRequestWithAuthentication.call(
+							this,
+							'instagramApi',
+							mediaRequestOptions,
+						);
+					} catch (error: unknown) {
+						if (!this.continueOnFail()) {
+							throw new NodeApiError(this.getNode(), error as JsonObject);
+						}
+
+						let errorItem: Record<string, unknown>;
+						type ResponseErrorType = {
+							statusCode?: number;
+							response?: {
+								body?: {
+									error?: {
+										[key: string]: unknown;
+									};
+								};
+								headers?: Record<string, unknown>;
+							};
+						};
+						const err = error as ResponseErrorType;
+						if (err.response !== undefined) {
+							const graphApiErrors = err.response.body?.error ?? {};
+							errorItem = {
+								statusCode: err.statusCode,
+								...graphApiErrors,
+								headers: err.response.headers,
+							};
+						} else {
+							errorItem = err;
+						}
+						returnItems.push({ json: errorItem as IDataObject, pairedItem: { item: itemIndex } });
+						continue;
+					}
+
+					if (typeof mediaResponse === 'string') {
+						if (!this.continueOnFail()) {
+							throw new NodeOperationError(this.getNode(), 'Media creation response body is not valid JSON.', {
+								itemIndex,
+							});
+						}
+						returnItems.push({ json: { message: mediaResponse }, pairedItem: { item: itemIndex } });
+						continue;
+					}
+
+					// Extract creation_id from first response
+					const responseCreationId = mediaResponse.id as string | undefined;
+					if (!responseCreationId) {
+						if (!this.continueOnFail()) {
+							throw new NodeOperationError(
+								this.getNode(),
+								'Media creation response did not contain an id (creation_id).',
+								{ itemIndex },
+							);
+						}
+						returnItems.push({ json: { error: 'No creation_id in response', response: mediaResponse }, pairedItem: { item: itemIndex } });
+						continue;
+					}
+
+					creationId = responseCreationId;
+
+					// Wait until the container is ready before publishing
+					await waitForContainerReady({
+						creationId,
+						hostUrl,
+						graphApiVersion,
+						itemIndex,
+						pollIntervalMs: handler.pollIntervalMs,
+						maxPollAttempts: handler.maxPollAttempts,
+					});
+				}
 
 				// Second request: Publish media
 				const publishUri = `https://${hostUrl}/${graphApiVersion}/${node}/media_publish`;

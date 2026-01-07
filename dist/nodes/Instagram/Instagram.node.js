@@ -50,7 +50,7 @@ class Instagram {
                     noDataExpression: true,
                     displayOptions: {
                         show: {
-                            resource: ['image', 'reels', 'stories'],
+                            resource: ['image', 'reels', 'stories', 'carousel'],
                         },
                     },
                     options: [
@@ -74,7 +74,7 @@ class Instagram {
                     required: true,
                     displayOptions: {
                         show: {
-                            resource: ['image', 'reels', 'stories'],
+                            resource: ['image', 'reels', 'stories', 'carousel'],
                             operation: ['publish'],
                         },
                     },
@@ -88,7 +88,7 @@ class Instagram {
                     required: true,
                     displayOptions: {
                         show: {
-                            resource: ['image', 'reels', 'stories'],
+                            resource: ['image', 'reels', 'stories', 'carousel'],
                             operation: ['publish'],
                         },
                     },
@@ -103,7 +103,7 @@ class Instagram {
                     required: true,
                     displayOptions: {
                         show: {
-                            resource: ['image', 'reels', 'stories'],
+                            resource: ['image', 'reels', 'stories', 'carousel'],
                             operation: ['publish'],
                         },
                     },
@@ -112,7 +112,7 @@ class Instagram {
         };
     }
     async execute() {
-        var _a, _b, _c, _d, _e, _f;
+        var _a, _b, _c, _d, _e, _f, _g, _h, _j, _k, _l, _m;
         const items = this.getInputData();
         const returnItems = [];
         const waitForContainerReady = async ({ creationId, hostUrl, graphApiVersion, itemIndex, pollIntervalMs, maxPollAttempts, }) => {
@@ -184,70 +184,378 @@ class Instagram {
                 const caption = this.getNodeParameter('caption', itemIndex);
                 const hostUrl = 'graph.facebook.com';
                 const httpRequestMethod = 'POST';
-                const mediaUri = `https://${hostUrl}/${graphApiVersion}/${node}/media`;
-                const mediaPayload = handler.buildMediaPayload.call(this, itemIndex);
-                const mediaQs = {
-                    caption,
-                    ...mediaPayload,
-                };
-                const mediaRequestOptions = {
-                    headers: {
-                        accept: 'application/json,text/*;q=0.99',
-                    },
-                    method: httpRequestMethod,
-                    url: mediaUri,
-                    qs: mediaQs,
-                    json: true,
-                };
-                let mediaResponse;
-                try {
-                    mediaResponse = await this.helpers.httpRequestWithAuthentication.call(this, 'instagramApi', mediaRequestOptions);
-                }
-                catch (error) {
-                    if (!this.continueOnFail()) {
-                        throw new n8n_workflow_1.NodeApiError(this.getNode(), error);
+                let creationId;
+                if (resource === 'carousel') {
+                    let mediaItemsParam;
+                    try {
+                        mediaItemsParam = this.getNodeParameter('mediaItems', itemIndex, {});
                     }
-                    let errorItem;
-                    const err = error;
-                    if (err.response !== undefined) {
-                        const graphApiErrors = (_b = (_a = err.response.body) === null || _a === void 0 ? void 0 : _a.error) !== null && _b !== void 0 ? _b : {};
-                        errorItem = {
-                            statusCode: err.statusCode,
-                            ...graphApiErrors,
-                            headers: err.response.headers,
-                        };
+                    catch (error) {
+                        if (!this.continueOnFail()) {
+                            throw new n8n_workflow_1.NodeOperationError(this.getNode(), `Failed to read mediaItems parameter: ${error.message}`, { itemIndex });
+                        }
+                        returnItems.push({
+                            json: { error: `Failed to read mediaItems parameter: ${error.message}` },
+                            pairedItem: { item: itemIndex },
+                        });
+                        continue;
+                    }
+                    let mediaItemsData = [];
+                    if (!mediaItemsParam || (typeof mediaItemsParam !== 'object' && !Array.isArray(mediaItemsParam))) {
+                        if (!this.continueOnFail()) {
+                            throw new n8n_workflow_1.NodeOperationError(this.getNode(), 'Media items parameter is missing or invalid. Please add at least 2 media items to the carousel.', { itemIndex });
+                        }
+                        returnItems.push({
+                            json: { error: 'Media items parameter is missing or invalid' },
+                            pairedItem: { item: itemIndex },
+                        });
+                        continue;
+                    }
+                    if (Array.isArray(mediaItemsParam)) {
+                        mediaItemsData = mediaItemsParam;
                     }
                     else {
-                        errorItem = err;
+                        if (Array.isArray(mediaItemsParam.item)) {
+                            mediaItemsData = mediaItemsParam.item;
+                        }
+                        else if (mediaItemsParam.item && typeof mediaItemsParam.item === 'object' && !Array.isArray(mediaItemsParam.item)) {
+                            mediaItemsData = [mediaItemsParam.item];
+                        }
+                        else if (Array.isArray(mediaItemsParam.values)) {
+                            mediaItemsData = mediaItemsParam.values;
+                        }
                     }
-                    returnItems.push({ json: errorItem, pairedItem: { item: itemIndex } });
-                    continue;
-                }
-                if (typeof mediaResponse === 'string') {
-                    if (!this.continueOnFail()) {
-                        throw new n8n_workflow_1.NodeOperationError(this.getNode(), 'Media creation response body is not valid JSON.', {
-                            itemIndex,
+                    if (!Array.isArray(mediaItemsData) || mediaItemsData.length < 2) {
+                        const isEmpty = Object.keys(mediaItemsParam).length === 0;
+                        const errorMessage = isEmpty
+                            ? 'No media items provided. Please add at least 2 media items (images or videos) to the carousel in the node configuration.'
+                            : `Carousel posts require at least 2 media items. Found: ${mediaItemsData.length}. Parameter structure: ${JSON.stringify(mediaItemsParam)}`;
+                        if (!this.continueOnFail()) {
+                            throw new n8n_workflow_1.NodeOperationError(this.getNode(), errorMessage, { itemIndex });
+                        }
+                        returnItems.push({
+                            json: {
+                                error: errorMessage,
+                                parameterStructure: mediaItemsParam,
+                                foundItems: mediaItemsData.length,
+                            },
+                            pairedItem: { item: itemIndex },
                         });
+                        continue;
                     }
-                    returnItems.push({ json: { message: mediaResponse }, pairedItem: { item: itemIndex } });
-                    continue;
-                }
-                const creationId = mediaResponse.id;
-                if (!creationId) {
-                    if (!this.continueOnFail()) {
-                        throw new n8n_workflow_1.NodeOperationError(this.getNode(), 'Media creation response did not contain an id (creation_id).', { itemIndex });
+                    if (mediaItemsData.length > 10) {
+                        if (!this.continueOnFail()) {
+                            throw new n8n_workflow_1.NodeOperationError(this.getNode(), 'Carousel posts can contain at most 10 media items.', { itemIndex });
+                        }
+                        returnItems.push({
+                            json: { error: 'Carousel posts can contain at most 10 media items' },
+                            pairedItem: { item: itemIndex },
+                        });
+                        continue;
                     }
-                    returnItems.push({ json: { error: 'No creation_id in response', response: mediaResponse }, pairedItem: { item: itemIndex } });
-                    continue;
+                    const mediaUri = `https://${hostUrl}/${graphApiVersion}/${node}/media`;
+                    const containerIds = [];
+                    let carouselCreationFailed = false;
+                    for (let i = 0; i < mediaItemsData.length; i++) {
+                        const item = mediaItemsData[i];
+                        if (!item || typeof item !== 'object') {
+                            if (!this.continueOnFail()) {
+                                throw new n8n_workflow_1.NodeOperationError(this.getNode(), `Media item ${i + 1} is invalid.`, { itemIndex });
+                            }
+                            returnItems.push({
+                                json: { error: `Media item ${i + 1} is invalid` },
+                                pairedItem: { item: itemIndex },
+                            });
+                            carouselCreationFailed = true;
+                            break;
+                        }
+                        const itemPayload = {
+                            is_carousel_item: true,
+                        };
+                        if (item.type === 'IMAGE') {
+                            const imageUrl = (_a = item.imageUrl) === null || _a === void 0 ? void 0 : _a.toString().trim();
+                            if (!imageUrl) {
+                                if (!this.continueOnFail()) {
+                                    throw new n8n_workflow_1.NodeOperationError(this.getNode(), `Media item ${i + 1} is missing imageUrl.`, { itemIndex });
+                                }
+                                returnItems.push({
+                                    json: { error: `Media item ${i + 1} is missing imageUrl` },
+                                    pairedItem: { item: itemIndex },
+                                });
+                                carouselCreationFailed = true;
+                                break;
+                            }
+                            itemPayload.image_url = imageUrl;
+                        }
+                        else if (item.type === 'VIDEO') {
+                            const videoUrl = (_b = item.videoUrl) === null || _b === void 0 ? void 0 : _b.toString().trim();
+                            if (!videoUrl) {
+                                if (!this.continueOnFail()) {
+                                    throw new n8n_workflow_1.NodeOperationError(this.getNode(), `Media item ${i + 1} is missing videoUrl.`, { itemIndex });
+                                }
+                                returnItems.push({
+                                    json: { error: `Media item ${i + 1} is missing videoUrl` },
+                                    pairedItem: { item: itemIndex },
+                                });
+                                carouselCreationFailed = true;
+                                break;
+                            }
+                            itemPayload.video_url = videoUrl;
+                            itemPayload.media_type = 'VIDEO';
+                        }
+                        else {
+                            if (!this.continueOnFail()) {
+                                throw new n8n_workflow_1.NodeOperationError(this.getNode(), `Media item ${i + 1} has invalid type: ${item.type}. Must be IMAGE or VIDEO.`, { itemIndex });
+                            }
+                            returnItems.push({
+                                json: { error: `Media item ${i + 1} has invalid type: ${item.type}` },
+                                pairedItem: { item: itemIndex },
+                            });
+                            carouselCreationFailed = true;
+                            break;
+                        }
+                        const itemRequestOptions = {
+                            headers: {
+                                accept: 'application/json,text/*;q=0.99',
+                            },
+                            method: httpRequestMethod,
+                            url: mediaUri,
+                            qs: itemPayload,
+                            json: true,
+                        };
+                        let itemResponse;
+                        try {
+                            itemResponse = await this.helpers.httpRequestWithAuthentication.call(this, 'instagramApi', itemRequestOptions);
+                        }
+                        catch (error) {
+                            if (!this.continueOnFail()) {
+                                throw new n8n_workflow_1.NodeApiError(this.getNode(), error, {
+                                    message: `Failed to create carousel item ${i + 1}: ${(error === null || error === void 0 ? void 0 : error.message) || 'Unknown error'}`,
+                                });
+                            }
+                            let errorItem;
+                            const err = error;
+                            if (err.response !== undefined) {
+                                const graphApiErrors = (_d = (_c = err.response.body) === null || _c === void 0 ? void 0 : _c.error) !== null && _d !== void 0 ? _d : {};
+                                errorItem = {
+                                    statusCode: err.statusCode,
+                                    message: err.message || (graphApiErrors === null || graphApiErrors === void 0 ? void 0 : graphApiErrors.message) || 'Unknown error',
+                                    ...graphApiErrors,
+                                    headers: err.response.headers,
+                                    itemIndex: i + 1,
+                                    payload: itemPayload,
+                                };
+                            }
+                            else {
+                                errorItem = {
+                                    ...err,
+                                    itemIndex: i + 1,
+                                    payload: itemPayload,
+                                };
+                            }
+                            returnItems.push({ json: errorItem, pairedItem: { item: itemIndex } });
+                            carouselCreationFailed = true;
+                            break;
+                        }
+                        if (typeof itemResponse === 'string') {
+                            if (!this.continueOnFail()) {
+                                throw new n8n_workflow_1.NodeOperationError(this.getNode(), `Media item ${i + 1} creation response body is not valid JSON.`, { itemIndex });
+                            }
+                            returnItems.push({
+                                json: { message: itemResponse, itemIndex: i + 1 },
+                                pairedItem: { item: itemIndex },
+                            });
+                            carouselCreationFailed = true;
+                            break;
+                        }
+                        const itemContainerId = itemResponse.id;
+                        if (!itemContainerId) {
+                            if (!this.continueOnFail()) {
+                                throw new n8n_workflow_1.NodeOperationError(this.getNode(), `Media item ${i + 1} creation response did not contain an id.`, { itemIndex });
+                            }
+                            returnItems.push({
+                                json: {
+                                    error: `No container id in response for item ${i + 1}`,
+                                    response: itemResponse,
+                                },
+                                pairedItem: { item: itemIndex },
+                            });
+                            carouselCreationFailed = true;
+                            break;
+                        }
+                        try {
+                            await waitForContainerReady({
+                                creationId: itemContainerId,
+                                hostUrl,
+                                graphApiVersion,
+                                itemIndex,
+                                pollIntervalMs: handler.pollIntervalMs,
+                                maxPollAttempts: handler.maxPollAttempts,
+                            });
+                        }
+                        catch (error) {
+                            if (!this.continueOnFail()) {
+                                throw error;
+                            }
+                            returnItems.push({
+                                json: {
+                                    error: `Failed to wait for container ${itemContainerId} to be ready`,
+                                    itemIndex: i + 1,
+                                    errorDetails: error,
+                                },
+                                pairedItem: { item: itemIndex },
+                            });
+                            carouselCreationFailed = true;
+                            break;
+                        }
+                        containerIds.push(itemContainerId);
+                    }
+                    if (carouselCreationFailed) {
+                        continue;
+                    }
+                    if (containerIds.length === 0) {
+                        if (!this.continueOnFail()) {
+                            throw new n8n_workflow_1.NodeOperationError(this.getNode(), 'No carousel items were successfully created.', { itemIndex });
+                        }
+                        returnItems.push({
+                            json: { error: 'No carousel items were successfully created' },
+                            pairedItem: { item: itemIndex },
+                        });
+                        continue;
+                    }
+                    const carouselPayload = {
+                        media_type: 'CAROUSEL',
+                        children: containerIds.join(','),
+                        caption,
+                    };
+                    const carouselRequestOptions = {
+                        headers: {
+                            accept: 'application/json,text/*;q=0.99',
+                        },
+                        method: httpRequestMethod,
+                        url: mediaUri,
+                        qs: carouselPayload,
+                        json: true,
+                    };
+                    let carouselResponse;
+                    try {
+                        carouselResponse = await this.helpers.httpRequestWithAuthentication.call(this, 'instagramApi', carouselRequestOptions);
+                    }
+                    catch (error) {
+                        if (!this.continueOnFail()) {
+                            throw new n8n_workflow_1.NodeApiError(this.getNode(), error);
+                        }
+                        let errorItem;
+                        const err = error;
+                        if (err.response !== undefined) {
+                            const graphApiErrors = (_f = (_e = err.response.body) === null || _e === void 0 ? void 0 : _e.error) !== null && _f !== void 0 ? _f : {};
+                            errorItem = {
+                                statusCode: err.statusCode,
+                                ...graphApiErrors,
+                                headers: err.response.headers,
+                            };
+                        }
+                        else {
+                            errorItem = err;
+                        }
+                        returnItems.push({ json: errorItem, pairedItem: { item: itemIndex } });
+                        continue;
+                    }
+                    if (typeof carouselResponse === 'string') {
+                        if (!this.continueOnFail()) {
+                            throw new n8n_workflow_1.NodeOperationError(this.getNode(), 'Carousel creation response body is not valid JSON.', { itemIndex });
+                        }
+                        returnItems.push({ json: { message: carouselResponse }, pairedItem: { item: itemIndex } });
+                        continue;
+                    }
+                    const carouselContainerId = carouselResponse.id;
+                    if (!carouselContainerId) {
+                        if (!this.continueOnFail()) {
+                            throw new n8n_workflow_1.NodeOperationError(this.getNode(), 'Carousel creation response did not contain an id (creation_id).', { itemIndex });
+                        }
+                        returnItems.push({
+                            json: { error: 'No creation_id in carousel response', response: carouselResponse },
+                            pairedItem: { item: itemIndex },
+                        });
+                        continue;
+                    }
+                    creationId = carouselContainerId;
+                    await waitForContainerReady({
+                        creationId,
+                        hostUrl,
+                        graphApiVersion,
+                        itemIndex,
+                        pollIntervalMs: handler.pollIntervalMs,
+                        maxPollAttempts: handler.maxPollAttempts,
+                    });
                 }
-                await waitForContainerReady({
-                    creationId,
-                    hostUrl,
-                    graphApiVersion,
-                    itemIndex,
-                    pollIntervalMs: handler.pollIntervalMs,
-                    maxPollAttempts: handler.maxPollAttempts,
-                });
+                else {
+                    const mediaUri = `https://${hostUrl}/${graphApiVersion}/${node}/media`;
+                    const mediaPayload = handler.buildMediaPayload.call(this, itemIndex);
+                    const mediaQs = {
+                        caption,
+                        ...mediaPayload,
+                    };
+                    const mediaRequestOptions = {
+                        headers: {
+                            accept: 'application/json,text/*;q=0.99',
+                        },
+                        method: httpRequestMethod,
+                        url: mediaUri,
+                        qs: mediaQs,
+                        json: true,
+                    };
+                    let mediaResponse;
+                    try {
+                        mediaResponse = await this.helpers.httpRequestWithAuthentication.call(this, 'instagramApi', mediaRequestOptions);
+                    }
+                    catch (error) {
+                        if (!this.continueOnFail()) {
+                            throw new n8n_workflow_1.NodeApiError(this.getNode(), error);
+                        }
+                        let errorItem;
+                        const err = error;
+                        if (err.response !== undefined) {
+                            const graphApiErrors = (_h = (_g = err.response.body) === null || _g === void 0 ? void 0 : _g.error) !== null && _h !== void 0 ? _h : {};
+                            errorItem = {
+                                statusCode: err.statusCode,
+                                ...graphApiErrors,
+                                headers: err.response.headers,
+                            };
+                        }
+                        else {
+                            errorItem = err;
+                        }
+                        returnItems.push({ json: errorItem, pairedItem: { item: itemIndex } });
+                        continue;
+                    }
+                    if (typeof mediaResponse === 'string') {
+                        if (!this.continueOnFail()) {
+                            throw new n8n_workflow_1.NodeOperationError(this.getNode(), 'Media creation response body is not valid JSON.', {
+                                itemIndex,
+                            });
+                        }
+                        returnItems.push({ json: { message: mediaResponse }, pairedItem: { item: itemIndex } });
+                        continue;
+                    }
+                    const responseCreationId = mediaResponse.id;
+                    if (!responseCreationId) {
+                        if (!this.continueOnFail()) {
+                            throw new n8n_workflow_1.NodeOperationError(this.getNode(), 'Media creation response did not contain an id (creation_id).', { itemIndex });
+                        }
+                        returnItems.push({ json: { error: 'No creation_id in response', response: mediaResponse }, pairedItem: { item: itemIndex } });
+                        continue;
+                    }
+                    creationId = responseCreationId;
+                    await waitForContainerReady({
+                        creationId,
+                        hostUrl,
+                        graphApiVersion,
+                        itemIndex,
+                        pollIntervalMs: handler.pollIntervalMs,
+                        maxPollAttempts: handler.maxPollAttempts,
+                    });
+                }
                 const publishUri = `https://${hostUrl}/${graphApiVersion}/${node}/media_publish`;
                 const publishQs = {
                     creation_id: creationId,
@@ -283,7 +591,7 @@ class Instagram {
                         let errorItem;
                         const err = error;
                         if (err.response !== undefined) {
-                            const graphApiErrors = (_d = (_c = err.response.body) === null || _c === void 0 ? void 0 : _c.error) !== null && _d !== void 0 ? _d : {};
+                            const graphApiErrors = (_k = (_j = err.response.body) === null || _j === void 0 ? void 0 : _j.error) !== null && _k !== void 0 ? _k : {};
                             errorItem = {
                                 statusCode: err.statusCode,
                                 ...graphApiErrors,
@@ -324,7 +632,7 @@ class Instagram {
                 let errorItem;
                 const errorWithGraph = error;
                 if (errorWithGraph.response !== undefined) {
-                    const graphApiErrors = (_f = (_e = errorWithGraph.response.body) === null || _e === void 0 ? void 0 : _e.error) !== null && _f !== void 0 ? _f : {};
+                    const graphApiErrors = (_m = (_l = errorWithGraph.response.body) === null || _l === void 0 ? void 0 : _l.error) !== null && _m !== void 0 ? _m : {};
                     errorItem = {
                         statusCode: errorWithGraph.statusCode,
                         ...graphApiErrors,

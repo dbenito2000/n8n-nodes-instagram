@@ -4,10 +4,12 @@ exports.instagramResourceFields = exports.instagramResourceOptions = exports.ins
 const image_1 = require("./image");
 const reels_1 = require("./reels");
 const stories_1 = require("./stories");
+const carousel_1 = require("./carousel");
 const handlers = {
     image: image_1.imageResource,
     reels: reels_1.reelsResource,
     stories: stories_1.storiesResource,
+    carousel: carousel_1.carouselResource,
 };
 exports.instagramResourceHandlers = handlers;
 exports.instagramResourceOptions = Object.values(handlers).map((handler) => handler.option);

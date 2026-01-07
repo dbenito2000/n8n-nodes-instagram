@@ -5,7 +5,7 @@ import type {
 	INodePropertyOptions,
 } from 'n8n-workflow';
 
-export type InstagramResourceType = 'image' | 'reels' | 'stories';
+export type InstagramResourceType = 'image' | 'reels' | 'stories' | 'carousel';
 
 export interface ResourceHandler {
 	value: InstagramResourceType;

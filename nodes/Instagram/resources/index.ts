@@ -3,11 +3,13 @@ import type { InstagramResourceType, ResourceHandler } from './types';
 import { imageResource } from './image';
 import { reelsResource } from './reels';
 import { storiesResource } from './stories';
+import { carouselResource } from './carousel';
 
 const handlers: Record<InstagramResourceType, ResourceHandler> = {
 	image: imageResource,
 	reels: reelsResource,
 	stories: storiesResource,
+	carousel: carouselResource,
 };
 
 export const instagramResourceHandlers = handlers;
